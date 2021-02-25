@@ -2,11 +2,11 @@ include config.mk
 include Makefile.vars
 
 MAKEF=$(MAKE) -f Makefile.in
-ALL_SRCDIRS=. base utils event protocol http http/client http/server consul examples
+ALL_SRCDIRS=. base utils event evpp protocol http http/client http/server consul
 
-LIBHV_SRCDIRS = . base utils event
+LIBHV_SRCDIRS = . base utils event evpp
 LIBHV_HEADERS = hv.h hconfig.h hexport.h
-LIBHV_HEADERS += $(BASE_HEADERS) $(UTILS_HEADERS) $(EVENT_HEADERS)
+LIBHV_HEADERS += $(BASE_HEADERS) $(UTILS_HEADERS) $(EVENT_HEADERS) $(EVPP_HEADERS)
 
 ifeq ($(WITH_PROTOCOL), yes)
 LIBHV_HEADERS += $(PROTOCOL_HEADERS)
@@ -32,10 +32,20 @@ endif
 
 default: all
 all: libhv examples
-examples: hmain_test htimer_test hloop_test tcp udp nc nmap httpd curl consul_cli
+examples: hmain_test htimer_test hloop_test \
+	nc nmap httpd curl \
+	udp_echo_server \
+	tcp_echo_server \
+	tcp_chat_server \
+	tcp_proxy_server \
+	http_server_test http_client_test \
+	websocket_server_test \
+	websocket_client_test \
+	consul_cli
 
 clean:
 	$(MAKEF) clean SRCDIRS="$(ALL_SRCDIRS)"
+	$(RM) examples/*.o
 	$(RM) include/hv
 
 prepare:
@@ -50,7 +60,7 @@ libhv:
 install:
 	$(MKDIR) $(INSTALL_INCDIR)
 	$(CP) include/hv/* $(INSTALL_INCDIR)
-	$(CP) lib/libhv.a lib/libhv.so $(INSTALL_LIBDIR)
+	$(CP) lib/libhv.*  $(INSTALL_LIBDIR)
 
 hmain_test: prepare
 	$(MAKEF) TARGET=$@ SRCDIRS=". base utils" SRCS="examples/hmain_test.cpp"
@@ -61,11 +71,17 @@ htimer_test: prepare
 hloop_test: prepare
 	$(MAKEF) TARGET=$@ SRCDIRS=". base event" SRCS="examples/hloop_test.c"
 
-tcp: prepare
-	$(MAKEF) TARGET=$@ SRCDIRS=". base event" SRCS="examples/tcp.c"
+udp_echo_server: prepare
+	$(MAKEF) TARGET=$@ SRCDIRS=". base event" SRCS="examples/udp_echo_server.c"
 
-udp: prepare
-	$(MAKEF) TARGET=$@ SRCDIRS=". base event" SRCS="examples/udp.c"
+tcp_echo_server: prepare
+	$(MAKEF) TARGET=$@ SRCDIRS=". base event" SRCS="examples/tcp_echo_server.c"
+
+tcp_chat_server: prepare
+	$(MAKEF) TARGET=$@ SRCDIRS=". base event" SRCS="examples/tcp_chat_server.c"
+
+tcp_proxy_server: prepare
+	$(MAKEF) TARGET=$@ SRCDIRS=". base event" SRCS="examples/tcp_proxy_server.c"
 
 nc: prepare
 	$(MAKEF) TARGET=$@ SRCDIRS=". base event" SRCS="examples/nc.c"
@@ -80,35 +96,57 @@ endif
 
 httpd: prepare
 	$(RM) examples/httpd/*.o
-	$(MAKEF) TARGET=$@ SRCDIRS=". base utils event http http/server examples/httpd"
+	$(MAKEF) TARGET=$@ SRCDIRS=". base utils event evpp http http/server examples/httpd"
 
 curl: prepare
-	$(MAKEF) TARGET=$@ SRCDIRS="$(CURL_SRCDIRS)" SRCDIRS=". base utils http http/client" SRCS="examples/curl.cpp"
-	# $(MAKEF) TARGET=$@ SRCDIRS="$(CURL_SRCDIRS)" SRCDIRS=". base utils http http/client" SRCS="examples/curl.cpp" WITH_CURL=yes DEFINES="CURL_STATICLIB"
+	$(MAKEF) TARGET=$@ SRCDIRS=". base utils event evpp http http/client" SRCS="examples/curl.cpp"
+	# $(MAKEF) TARGET=$@ SRCDIRS=". base utils event http http/client" SRCS="examples/curl.cpp" WITH_CURL=yes DEFINES="CURL_STATICLIB"
+
+http_server_test: prepare
+	$(MAKEF) TARGET=$@ SRCDIRS=". base utils event evpp http http/server" SRCS="examples/http_server_test.cpp"
+
+http_client_test: prepare
+	$(MAKEF) TARGET=$@ SRCDIRS=". base utils event evpp http http/client" SRCS="examples/http_client_test.cpp"
+
+websocket_server_test: prepare
+	$(MAKEF) TARGET=$@ SRCDIRS=". base utils event evpp http http/server" SRCS="examples/websocket_server_test.cpp"
+
+websocket_client_test: prepare
+	$(MAKEF) TARGET=$@ SRCDIRS=". base utils event evpp http http/client" SRCS="examples/websocket_client_test.cpp"
 
 consul_cli: prepare
-	$(MAKEF) TARGET=$@ SRCDIRS=". base utils http http/client consul" SRCS="examples/consul_cli.cpp" DEFINES="PRINT_DEBUG"
+	$(MAKEF) TARGET=$@ SRCDIRS=". base utils event evpp http http/client consul" SRCS="examples/consul_cli.cpp" DEFINES="PRINT_DEBUG"
 
 unittest: prepare
-	$(CC)  -g -Wall -std=c99   -I. -Ibase            -o bin/mkdir_p           unittest/mkdir_test.c         base/hbase.c
-	$(CC)  -g -Wall -std=c99   -I. -Ibase            -o bin/rmdir_p           unittest/rmdir_test.c         base/hbase.c
-	$(CC)  -g -Wall -std=c99   -I. -Ibase            -o bin/date              unittest/date_test.c          base/htime.c
-	$(CC)  -g -Wall -std=c99   -I. -Ibase            -o bin/hatomic_test      unittest/hatomic_test.c       -pthread
-	$(CXX) -g -Wall -std=c++11 -I. -Ibase            -o bin/hatomic_cpp_test  unittest/hatomic_test.cpp     -pthread
-	$(CC)  -g -Wall -std=c99   -I. -Ibase            -o bin/hmutex_test       unittest/hmutex_test.c        base/htime.c -pthread
-	$(CC)  -g -Wall -std=c99   -I. -Ibase            -o bin/connect_test      unittest/connect_test.c       base/hsocket.c base/htime.c
-	$(CC)  -g -Wall -std=c99   -I. -Ibase            -o bin/socketpair_test   unittest/socketpair_test.c    base/hsocket.c
-	$(CXX) -g -Wall -std=c++11 -I. -Ibase            -o bin/defer_test        unittest/defer_test.cpp
-	$(CXX) -g -Wall -std=c++11 -I. -Ibase            -o bin/synchronized_test unittest/synchronized_test.cpp -pthread
-	$(CXX) -g -Wall -std=c++11 -I. -Ibase            -o bin/hstring_test      unittest/hstring_test.cpp     base/hstring.cpp
-	$(CXX) -g -Wall -std=c++11 -I. -Ibase            -o bin/threadpool_test   unittest/threadpool_test.cpp  -pthread
-	$(CXX) -g -Wall -std=c++11 -I. -Ibase            -o bin/objectpool_test   unittest/objectpool_test.cpp  -pthread
-	$(CXX) -g -Wall -std=c++11 -I. -Ibase            -o bin/ls                unittest/listdir_test.cpp     base/hdir.cpp
-	$(CXX) -g -Wall -std=c++11 -I. -Ibase            -o bin/ifconfig          unittest/ifconfig_test.cpp    base/ifconfig.cpp
-	$(CC)  -g -Wall -std=c99   -I. -Ibase -Iprotocol -o bin/nslookup          unittest/nslookup_test.c      protocol/dns.c
-	$(CC)  -g -Wall -std=c99   -I. -Ibase -Iprotocol -o bin/ping              unittest/ping_test.c          protocol/icmp.c base/hsocket.c base/htime.c -DPRINT_DEBUG
-	$(CC)  -g -Wall -std=c99   -I. -Ibase -Iprotocol -o bin/ftp               unittest/ftp_test.c           protocol/ftp.c  base/hsocket.c
-	$(CC)  -g -Wall -std=c99   -I. -Ibase -Iutils -Iprotocol -o bin/sendmail  unittest/sendmail_test.c      protocol/smtp.c base/hsocket.c utils/base64.c
+	$(CC)  -g -Wall -O0 -std=c99   -I. -Ibase            -o bin/mkdir_p           unittest/mkdir_test.c         base/hbase.c
+	$(CC)  -g -Wall -O0 -std=c99   -I. -Ibase            -o bin/rmdir_p           unittest/rmdir_test.c         base/hbase.c
+	$(CC)  -g -Wall -O0 -std=c99   -I. -Ibase            -o bin/date              unittest/date_test.c          base/htime.c
+	$(CC)  -g -Wall -O0 -std=c99   -I. -Ibase            -o bin/hatomic_test      unittest/hatomic_test.c       -pthread
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase            -o bin/hatomic_cpp_test  unittest/hatomic_test.cpp     -pthread
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase            -o bin/hthread_test      unittest/hthread_test.cpp     -pthread
+	$(CC)  -g -Wall -O0 -std=c99   -I. -Ibase            -o bin/hmutex_test       unittest/hmutex_test.c        base/htime.c   -pthread
+	$(CC)  -g -Wall -O0 -std=c99   -I. -Ibase            -o bin/connect_test      unittest/connect_test.c       base/hsocket.c base/htime.c
+	$(CC)  -g -Wall -O0 -std=c99   -I. -Ibase            -o bin/socketpair_test   unittest/socketpair_test.c    base/hsocket.c
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase            -o bin/defer_test        unittest/defer_test.cpp
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase            -o bin/synchronized_test unittest/synchronized_test.cpp -pthread
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase            -o bin/hstring_test      unittest/hstring_test.cpp     base/hstring.cpp
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase            -o bin/threadpool_test   unittest/threadpool_test.cpp  -pthread
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase            -o bin/objectpool_test   unittest/objectpool_test.cpp  -pthread
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase            -o bin/ls                unittest/listdir_test.cpp     base/hdir.cpp
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase            -o bin/ifconfig          unittest/ifconfig_test.cpp    base/ifconfig.cpp
+	$(CC)  -g -Wall -O0 -std=c99   -I. -Ibase -Iprotocol -o bin/nslookup          unittest/nslookup_test.c      protocol/dns.c
+	$(CC)  -g -Wall -O0 -std=c99   -I. -Ibase -Iprotocol -o bin/ping              unittest/ping_test.c          protocol/icmp.c base/hsocket.c base/htime.c -DPRINT_DEBUG
+	$(CC)  -g -Wall -O0 -std=c99   -I. -Ibase -Iprotocol -o bin/ftp               unittest/ftp_test.c           protocol/ftp.c  base/hsocket.c
+	$(CC)  -g -Wall -O0 -std=c99   -I. -Ibase -Iutils -Iprotocol -o bin/sendmail  unittest/sendmail_test.c      protocol/smtp.c base/hsocket.c utils/base64.c
+
+evpp: prepare libhv
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase -Ievent -Ievpp -o bin/EventLoop_test           evpp/EventLoop_test.cpp           -Llib -lhv -lpthread
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase -Ievent -Ievpp -o bin/EventLoopThread_test     evpp/EventLoopThread_test.cpp     -Llib -lhv -lpthread
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase -Ievent -Ievpp -o bin/EventLoopThreadPool_test evpp/EventLoopThreadPool_test.cpp -Llib -lhv -lpthread
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase -Ievent -Ievpp -o bin/TcpServer_test           evpp/TcpServer_test.cpp           -Llib -lhv -lpthread
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase -Ievent -Ievpp -o bin/TcpClient_test           evpp/TcpClient_test.cpp           -Llib -lhv -lpthread
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase -Ievent -Ievpp -o bin/UdpServer_test           evpp/UdpServer_test.cpp           -Llib -lhv -lpthread
+	$(CXX) -g -Wall -O0 -std=c++11 -I. -Ibase -Ievent -Ievpp -o bin/UdpClient_test           evpp/UdpClient_test.cpp           -Llib -lhv -lpthread
 
 # UNIX only
 webbench: prepare
@@ -123,4 +161,4 @@ echo-servers:
 	$(CXX) -g -Wall -std=c++11 -o bin/poco_echo     echo-servers/poco_echo.cpp   -lPocoNet -lPocoUtil -lPocoFoundation
 	$(CXX) -g -Wall -std=c++11 -o bin/muduo_echo    echo-servers/muduo_echo.cpp  -lmuduo_net -lmuduo_base -lpthread
 
-.PHONY: clean prepare libhv install examples hmain_test htimer_test hloop_test tcp udp nc nmap httpd curl consul_cli unittest webbench echo-servers
+.PHONY: clean prepare libhv install examples nc nmap httpd curl consul_cli unittest evpp webbench echo-servers

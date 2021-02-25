@@ -1,4 +1,7 @@
 [![Build Status](https://travis-ci.org/ithewei/libhv.svg?branch=master)](https://travis-ci.org/ithewei/libhv)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20Mac-blue)](.travis.yml)
+
+[中文版](readme_cn.md)
 
 ## Intro
 
@@ -15,6 +18,7 @@ but simpler api and richer protocols.
 - WITH_OPENSSL or WITH_MBEDTLS
 - http client/server (include https http1/x http2 grpc)
 - http web service, indexof service, api service (support RESTful API)
+- websocket client/server
 - protocols
     - dns
     - ftp
@@ -37,48 +41,65 @@ but simpler api and richer protocols.
 
 ### HTTP
 #### http server
-see `examples/httpd/httpd.cpp`
+see [examples/http_server_test.cpp](examples/http_server_test.cpp)
 ```c++
 #include "HttpServer.h"
 
 int main() {
-    HttpService service;
-    service.base_url = "/v1/api";
-    service.POST("/echo", [](HttpRequest* req, HttpResponse* res) {
-        res->body = req->body;
+    HttpService router;
+    router.GET("/ping", [](HttpRequest* req, HttpResponse* resp) {
+        return resp->String("pong");
+    });
+
+    router.GET("/data", [](HttpRequest* req, HttpResponse* resp) {
+        static char data[] = "0123456789";
+        return resp->Data(data, 10);
+    });
+
+    router.GET("/paths", [&router](HttpRequest* req, HttpResponse* resp) {
+        return resp->Json(router.Paths());
+    });
+
+    router.POST("/echo", [](HttpRequest* req, HttpResponse* resp) {
+        resp->content_type = req->content_type;
+        resp->body = req->body;
         return 200;
     });
 
     http_server_t server;
     server.port = 8080;
-    server.service = &service;
+    server.service = &router;
     http_server_run(&server);
     return 0;
 }
 ```
 #### http client
-see `examples/curl.cpp`
+see [examples/http_client_test.cpp](examples/http_client_test.cpp)
 ```c++
-#include "http_client.h"
+#include "requests.h"
 
-int main(int argc, char* argv[]) {
-    HttpRequest req;
-    req.method = HTTP_POST;
-    req.url = "http://localhost:8080/v1/api/echo";
-    req.body = "hello,world!";
-    HttpResponse res;
-    int ret = http_client_send(&req, &res);
-    printf("%s\n", req.Dump(true,true).c_str());
-    if (ret != 0) {
-        printf("* Failed:%s:%d\n", http_client_strerror(ret), ret);
+int main() {
+    auto resp = requests::get("http://www.example.com");
+    if (resp == NULL) {
+        printf("request failed!\n");
+    } else {
+        printf("%d %s\r\n", resp->status_code, resp->status_message());
+        printf("%s\n", resp->body.c_str());
     }
-    else {
-        printf("%s\n", res.Dump(true,true).c_str());
+
+    resp = requests::post("127.0.0.1:8080/echo", "hello,world!");
+    if (resp == NULL) {
+        printf("request failed!\n");
+    } else {
+        printf("%d %s\r\n", resp->status_code, resp->status_message());
+        printf("%s\n", resp->body.c_str());
     }
-    return ret;
+
+    return 0;
 }
 ```
 
+#### httpd/curl
 ```shell
 git clone https://github.com/ithewei/libhv.git
 cd libhv
@@ -109,17 +130,27 @@ bin/curl -v localhost:8080/test -H "Content-Type:application/json" -d '{"bool":t
 bin/curl -v localhost:8080/test -F 'bool=1 int=123 float=3.14 string=hello'
 # RESTful API: /group/:group_name/user/:user_id
 bin/curl -v -X DELETE localhost:8080/group/test/user/123
+```
 
+#### benchmark
+```shell
 # webbench (linux only)
 make webbench
-bin/webbench -c 2 -t 60 localhost:8080
+bin/webbench -c 2 -t 10 http://127.0.0.1:8080/
+bin/webbench -k -c 2 -t 10 http://127.0.0.1:8080/
+
+# sudo apt install apache2-utils
+ab -c 100 -n 100000 http://127.0.0.1:8080/
+
+# sudo apt install wrk
+wrk -c 100 -t 4 -d 10s http://127.0.0.1:8080/
 ```
 
 **libhv(port:8080) vs nginx(port:80)**
 ![libhv-vs-nginx.png](html/downloads/libhv-vs-nginx.png)
 
 ### EventLoop
-see `examples/tcp.c` `examples/udp.c`
+see [examples/tcp_echo_server.c](examples/tcp_echo_server.c) [examples/udp_echo_server.c](examples/udp_echo_server.c) [examples/nc.c](examples/nc.c)
 ```c
 // TCP echo server
 #include "hloop.h"
@@ -155,20 +186,26 @@ int main(int argc, char** argv) {
 }
 ```
 ```shell
-make tcp udp nc
-bin/tcp 1111
-bin/nc 127.0.0.1 1111
+make examples
 
-bin/udp 2222
-bin/nc -u 127.0.0.1 2222
+bin/tcp_echo_server 1234
+bin/nc 127.0.0.1 1234
 
-make hloop_test
-bin/hloop_test
-bin/nc 127.0.0.1 10514
+bin/tcp_chat_server 1234
+bin/nc 127.0.0.1 1234
+bin/nc 127.0.0.1 1234
+
+bin/httpd -s restart -d
+bin/tcp_proxy_server 1234 127.0.0.1:8080
+bin/curl -v 127.0.0.1:8080
+bin/curl -v 127.0.0.1:1234
+
+bin/udp_echo_server 1234
+bin/nc -u 127.0.0.1 1234
 ```
 
 ## BUILD
-see BUILD.md
+see [BUILD.md](BUILD.md)
 
 ### lib
 - make libhv
@@ -176,12 +213,6 @@ see BUILD.md
 
 ### examples
 - make examples
-    - make tcp   # tcp server
-    - make udp   # udp server
-    - make nc    # network client
-    - make nmap  # host discovery
-    - make httpd # http server
-    - make curl  # http client
 
 ### unittest
 - make unittest
@@ -224,7 +255,7 @@ bin/curl -v localhost:8080 --http2
 ```
 
 #### other options
-see config.mk
+see [config.mk](config.mk)
 
 ### echo-servers
 ```shell

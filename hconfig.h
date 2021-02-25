@@ -10,7 +10,7 @@
 #endif
 
 #ifndef HAVE_STDATOMIC_H
-#define HAVE_STDATOMIC_H 1
+#define HAVE_STDATOMIC_H 0
 #endif
 
 #ifndef HAVE_SYS_TYPES_H
@@ -64,5 +64,8 @@
 #ifndef HAVE_SEM_TIMEDWAIT
 #define HAVE_SEM_TIMEDWAIT 0
 #endif
+
+/* #undef ENABLE_UDS */
+/* #undef USE_MULTIMAP */
 
 #endif // HV_CONFIG_H_

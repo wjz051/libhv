@@ -1,11 +1,41 @@
 #ifndef HTTP_MESSAGE_H_
 #define HTTP_MESSAGE_H_
 
+/*
+ * @class HttpMessage
+ * HttpRequest extends HttpMessage
+ * HttpResponse extends HttpMessage
+ *
+ * @member
+ * request-line: GET / HTTP/1.1\r\n => method path
+ * response-line: 200 OK\r\n => status_code
+ * headers
+ * body
+ *
+ * content, content_length, content_type
+ * json, form, kv
+ *
+ * @function
+ * Content, ContentLength, ContentType
+ * Get, Set
+ * GetHeader, GetParam, GetString, GetBool, GetInt, GetFloat
+ * String, Data, File, Json
+ *
+ * @example
+ * see examples/httpd
+ *
+ */
+
+#include <memory>
 #include <string>
 #include <map>
+#include <functional>
 
 #include "hexport.h"
+#include "hbase.h"
 #include "hstring.h"
+#include "hfile.h"
+
 #include "httpdef.h"
 #include "http_content.h"
 
@@ -64,6 +94,49 @@ public:
             break;
         }
     }
+
+    /*
+     * null:    Json(nullptr);
+     * boolean: Json(true);
+     * number:  Json(123);
+     * string:  Json("hello");
+     * object:  Json(std::map<string, ValueType>);
+     *          Json(hv::Json::object({
+                    {"k1", "v1"},
+                    {"k2", "v2"}
+                }));
+     * array:   Json(std::vector<ValueType>);
+                Json(hv::Json::object(
+                    {1, 2, 3}
+                ));
+     */
+    template<typename T>
+    int Json(const T& t) {
+        content_type = APPLICATION_JSON;
+        json = t;
+        return 200;
+    }
+
+    void UploadFormFile(const char* name, const char* filepath) {
+        content_type = MULTIPART_FORM_DATA;
+        form[name] = FormData(NULL, filepath);
+    }
+
+    int SaveFormFile(const char* name, const char* filepath) {
+        if (content_type != MULTIPART_FORM_DATA) {
+            return HTTP_STATUS_BAD_REQUEST;
+        }
+        FormData formdata = form[name];
+        if (formdata.content.empty()) {
+            return HTTP_STATUS_BAD_REQUEST;
+        }
+        HFile file;
+        if (file.open(filepath, "wb") != 0) {
+            return HTTP_STATUS_INTERNAL_SERVER_ERROR;
+        }
+        file.write(formdata.content.data(), formdata.content.size());
+        return 200;
+    }
 #endif
 
     HttpMessage() {
@@ -97,12 +170,12 @@ public:
     // body.size -> content_length <-> headers Content-Length
     void FillContentLength();
 
-    std::string GetHeader(const char* key) {
+    std::string GetHeader(const char* key, const std::string& defvalue = "") {
         auto iter = headers.find(key);
         if (iter != headers.end()) {
             return iter->second;
         }
-        return "";
+        return defvalue;
     }
 
     // headers -> string
@@ -135,6 +208,35 @@ public:
         }
         return content_type;
     }
+
+    int String(const std::string& str) {
+        content_type = TEXT_PLAIN;
+        body = str;
+        return 200;
+    }
+
+    int Data(void* data, int len) {
+        content_type = APPLICATION_OCTET_STREAM;
+        content = data;
+        content_length = len;
+        return 200;
+    }
+
+    int File(const char* filepath) {
+        HFile file;
+        if (file.open(filepath, "rb") != 0) {
+            return HTTP_STATUS_NOT_FOUND;
+        }
+        const char* suffix = hv_suffixname(filepath);
+        if (suffix) {
+            content_type = http_content_type_enum_by_suffix(suffix);
+        }
+        if (content_type == CONTENT_TYPE_NONE || content_type == CONTENT_TYPE_UNDEFINED) {
+            content_type = APPLICATION_OCTET_STREAM;
+        }
+        file.readall(body);
+        return 200;
+    }
 };
 
 #define DEFAULT_USER_AGENT "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.132 Safari/537.36"
@@ -150,7 +252,8 @@ public:
     std::string         path;
     QueryParams         query_params;
     // client_addr
-    HNetAddr            client_addr;
+    HNetAddr            client_addr; // for http server save client addr of request
+    int                 timeout; // for http client timeout
 
     HttpRequest() : HttpMessage() {
         type = HTTP_REQUEST;
@@ -165,6 +268,7 @@ public:
         host = "127.0.0.1";
         port = DEFAULT_HTTP_PORT;
         path = "/";
+        timeout = 0;
     }
 
     virtual void Reset() {
@@ -176,12 +280,12 @@ public:
 
     virtual std::string Dump(bool is_dump_headers, bool is_dump_body);
 
-    std::string GetParam(const char* key) {
+    std::string GetParam(const char* key, const std::string& defvalue = "") {
         auto iter = query_params.find(key);
         if (iter != query_params.end()) {
             return iter->second;
         }
-        return "";
+        return defvalue;
     }
 
     // structed url -> url
@@ -192,7 +296,10 @@ public:
 
 class HV_EXPORT HttpResponse : public HttpMessage {
 public:
-    http_status         status_code;
+    http_status status_code;
+    const char* status_message() {
+        return http_status_str(status_code);
+    }
 
     HttpResponse() : HttpMessage() {
         type = HTTP_RESPONSE;
@@ -210,5 +317,9 @@ public:
 
     virtual std::string Dump(bool is_dump_headers = true, bool is_dump_body = false);
 };
+
+typedef std::shared_ptr<HttpRequest>    HttpRequestPtr;
+typedef std::shared_ptr<HttpResponse>   HttpResponsePtr;
+typedef std::function<void(const HttpResponsePtr&)> HttpResponseCallback;
 
 #endif // HTTP_MESSAGE_H_

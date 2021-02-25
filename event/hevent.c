@@ -1,5 +1,21 @@
 #include "hevent.h"
 #include "hsocket.h"
+#include "hatomic.h"
+#include "hlog.h"
+
+uint64_t hloop_next_event_id() {
+    static hatomic_t s_id = HATOMIC_VAR_INIT(0);
+    return ++s_id;
+}
+
+uint32_t hio_next_id() {
+    static hatomic_t s_id = HATOMIC_VAR_INIT(0);
+    return ++s_id;
+}
+
+uint32_t hio_id (hio_t* io) {
+    return io->id;
+}
 
 int hio_fd(hio_t* io) {
     return io->fd;
@@ -13,12 +29,28 @@ int hio_error(hio_t* io) {
     return io->error;
 }
 
+int hio_events(hio_t* io) {
+    return io->events;
+}
+
+int hio_revents(hio_t* io) {
+    return io->revents;
+}
+
 struct sockaddr* hio_localaddr(hio_t* io) {
     return io->localaddr;
 }
 
 struct sockaddr* hio_peeraddr(hio_t* io) {
     return io->peeraddr;
+}
+
+void hio_set_context(hio_t* io, void* ctx) {
+    io->ctx = ctx;
+}
+
+void* hio_context(hio_t* io) {
+    return io->ctx;
 }
 
 void hio_setcb_accept   (hio_t* io, haccept_cb  accept_cb) {
@@ -87,11 +119,55 @@ void hio_set_close_timeout(hio_t* io, int timeout_ms) {
     io->close_timeout = timeout_ms;
 }
 
+static void __keepalive_timeout_cb(htimer_t* timer) {
+    hio_t* io = (hio_t*)timer->privdata;
+    if (io) {
+        char localaddrstr[SOCKADDR_STRLEN] = {0};
+        char peeraddrstr[SOCKADDR_STRLEN] = {0};
+        hlogw("keepalive timeout [%s] <=> [%s]",
+                SOCKADDR_STR(io->localaddr, localaddrstr),
+                SOCKADDR_STR(io->peeraddr, peeraddrstr));
+        io->error = ETIMEDOUT;
+        hio_close(io);
+    }
+}
+
 void hio_set_keepalive_timeout(hio_t* io, int timeout_ms) {
+    if (io->keepalive_timer) {
+        if (timeout_ms == 0) {
+            htimer_del(io->keepalive_timer);
+            io->keepalive_timer = NULL;
+        } else {
+            ((struct htimeout_s*)io->keepalive_timer)->timeout = timeout_ms;
+            htimer_reset(io->keepalive_timer);
+        }
+    } else {
+        io->keepalive_timer = htimer_add(io->loop, __keepalive_timeout_cb, timeout_ms, 1);
+        io->keepalive_timer->privdata = io;
+    }
     io->keepalive_timeout = timeout_ms;
 }
 
+static void __heartbeat_timer_cb(htimer_t* timer) {
+    hio_t* io = (hio_t*)timer->privdata;
+    if (io && io->heartbeat_fn) {
+        io->heartbeat_fn(io);
+    }
+}
+
 void hio_set_heartbeat(hio_t* io, int interval_ms, hio_send_heartbeat_fn fn) {
+    if (io->heartbeat_timer) {
+        if (interval_ms == 0) {
+            htimer_del(io->heartbeat_timer);
+            io->heartbeat_timer = NULL;
+        } else {
+            ((struct htimeout_s*)io->heartbeat_fn)->timeout = interval_ms;
+            htimer_reset(io->keepalive_timer);
+        }
+    } else {
+        io->heartbeat_timer = htimer_add(io->loop, __heartbeat_timer_cb, interval_ms, INFINITE);
+        io->heartbeat_timer->privdata = io;
+    }
     io->heartbeat_interval = interval_ms;
     io->heartbeat_fn = fn;
 }

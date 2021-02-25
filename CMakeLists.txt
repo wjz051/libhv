@@ -1,12 +1,15 @@
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.6)
 
-project(hv VERSION 1.20.8)
+project(hv VERSION 1.0.0)
 
 option(BUILD_SHARED "build shared library" ON)
 option(BUILD_STATIC "build static library" ON)
 
+option(BUILD_EXAMPLES "build examples" ON)
+option(BUILD_UNITTEST "build unittest" OFF)
+
 # see config.mk
-option(WITH_PROTOCOL "compile protocol" ON)
+option(WITH_PROTOCOL "compile protocol" OFF)
 
 option(WITH_HTTP "compile http" ON)
 option(WITH_HTTP_SERVER "compile http/server" ON)
@@ -26,7 +29,7 @@ option(WITH_NGHTTP2 "with nghttp2 library" OFF)
 option(WITH_OPENSSL "with openssl library" OFF)
 option(WITH_MBEDTLS "with mbedtls library" OFF)
 
-set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake;${CMAKE_MODULE_PATH}")
+set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake;${CMAKE_MODULE_PATH}")
 include(utils)
 include(vars)
 
@@ -131,9 +134,9 @@ endif()
 
 # see Makefile
 set(ALL_SRCDIRS . base utils event protocol http http/client http/server consul examples)
-set(LIBHV_SRCDIRS . base utils event)
+set(LIBHV_SRCDIRS . base utils event evpp)
 set(LIBHV_HEADERS hv.h hconfig.h hexport.h)
-set(LIBHV_HEADERS ${LIBHV_HEADERS} ${BASE_HEADERS} ${UTILS_HEADERS} ${EVENT_HEADERS})
+set(LIBHV_HEADERS ${LIBHV_HEADERS} ${BASE_HEADERS} ${UTILS_HEADERS} ${EVENT_HEADERS} ${EVPP_HEADERS})
 
 if(WITH_PROTOCOL)
     set(LIBHV_HEADERS ${LIBHV_HEADERS} ${PROTOCOL_HEADERS})
@@ -179,5 +182,10 @@ endif()
 file(INSTALL ${LIBHV_HEADERS} DESTINATION include/hv)
 install(FILES ${LIBHV_HEADERS} DESTINATION include/hv)
 
-add_subdirectory(unittest)
-add_subdirectory(examples)
+if(BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
+
+if(BUILD_UNITTEST)
+    add_subdirectory(unittest)
+endif()

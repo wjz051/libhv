@@ -59,7 +59,9 @@ static inline int hthread_join(hthread_t th) {
     CloseHandle(th);
     return 0;
 }
+
 #else
+
 typedef pthread_t   hthread_t;
 typedef void* (*hthread_routine)(void*);
 #define HTHREAD_RETTYPE void*
@@ -73,6 +75,7 @@ static inline hthread_t hthread_create(hthread_routine fn, void* userdata) {
 static inline int hthread_join(hthread_t th) {
     return pthread_join(th, NULL);
 }
+
 #endif
 
 #ifdef __cplusplus
@@ -105,6 +108,7 @@ public:
     HThread() {
         status = STOP;
         status_changed = false;
+        dotask_cnt = 0;
         sleep_policy = YIELD;
         sleep_ms = 0;
     }
@@ -124,12 +128,11 @@ public:
 
     virtual int start() {
         if (status == STOP) {
-            setStatus(RUNNING);
-            dotask_cnt = 0;
-
             thread = std::thread([this] {
                 if (!doPrepare()) return;
+                setStatus(RUNNING);
                 run();
+                setStatus(STOP);
                 if (!doFinish()) return;
             });
         }
@@ -139,6 +142,8 @@ public:
     virtual int stop() {
         if (status != STOP) {
             setStatus(STOP);
+        }
+        if (thread.joinable()) {
             thread.join();  // wait thread exit
         }
         return 0;

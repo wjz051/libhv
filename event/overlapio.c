@@ -247,6 +247,7 @@ int hio_accept (hio_t* io) {
     for (int i = 0; i < ACCEPTEX_NUM; ++i) {
         post_acceptex(io, NULL);
     }
+    io->accept = 1;
     return hio_add(io, hio_handle_events, HV_READ);
 }
 
@@ -286,6 +287,7 @@ int hio_connect (hio_t* io) {
             goto error;
         }
     }
+    io->connect = 1;
     return hio_add(io, hio_handle_events, HV_WRITE);
 error:
     hio_close(io);
@@ -379,7 +381,21 @@ disconnect:
 int hio_close (hio_t* io) {
     if (io->closed) return 0;
     io->closed = 1;
-    hio_del(io, HV_RDWR);
+    hio_done(io);
+    if (io->hovlp) {
+        hoverlapped_t* hovlp = (hoverlapped_t*)io->hovlp;
+        // NOTE: hread buf provided by caller
+        if (hovlp->buf.buf != io->readbuf.base) {
+            HV_FREE(hovlp->buf.buf);
+        }
+        HV_FREE(hovlp->addr);
+        HV_FREE(io->hovlp);
+    }
+    if (io->close_cb) {
+        //printd("close_cb------\n");
+        io->close_cb(io);
+        //printd("close_cb======\n");
+    }
     if (io->io_type & HIO_TYPE_SOCKET) {
 #ifdef USE_DISCONNECTEX
         // DisconnectEx reuse socket
@@ -399,20 +415,6 @@ int hio_close (hio_t* io) {
 #else
         closesocket(io->fd);
 #endif
-    }
-    if (io->hovlp) {
-        hoverlapped_t* hovlp = (hoverlapped_t*)io->hovlp;
-        // NOTE: hread buf provided by caller
-        if (hovlp->buf.buf != io->readbuf.base) {
-            HV_FREE(hovlp->buf.buf);
-        }
-        HV_FREE(hovlp->addr);
-        HV_FREE(io->hovlp);
-    }
-    if (io->close_cb) {
-        //printd("close_cb------\n");
-        io->close_cb(io);
-        //printd("close_cb======\n");
     }
     return 0;
 }

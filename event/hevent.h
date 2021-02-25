@@ -12,12 +12,6 @@
 
 #define HLOOP_READ_BUFSIZE  8192
 
-typedef enum {
-    HLOOP_STATUS_STOP,
-    HLOOP_STATUS_RUNNING,
-    HLOOP_STATUS_PAUSE
-} hloop_status_e;
-
 ARRAY_DECL(hio_t*, io_array);
 QUEUE_DECL(hevent_t, event_queue);
 
@@ -29,10 +23,11 @@ struct hloop_s {
     uint64_t    end_hrtime;
     uint64_t    cur_hrtime;
     uint64_t    loop_cnt;
+    long        pid;
+    long        tid;
     void*       userdata;
 //private:
     // events
-    uint64_t                    event_counter;
     uint32_t                    nactives;
     uint32_t                    npendings;
     // pendings: with priority as array.index
@@ -54,6 +49,8 @@ struct hloop_s {
     event_queue                 custom_events;
     hmutex_t                    custom_events_mutex;
 };
+
+uint64_t hloop_next_event_id();
 
 struct hidle_s {
     HEVENT_FIELDS
@@ -101,6 +98,7 @@ struct hio_s {
     unsigned    sendto      :1;
     unsigned    close       :1;
 // public:
+    uint32_t    id; // fd cannot be used as unique identifier, so we provide an id
     int         fd;
     hio_type_e  io_type;
     int         error;
@@ -110,6 +108,7 @@ struct hio_s {
     struct sockaddr*    peeraddr;
     hbuf_t              readbuf;        // for hread
     struct write_queue  write_queue;    // for hwrite
+    hrecursive_mutex_t  write_mutex;    // lock write and write_queue
     // callbacks
     hread_cb    read_cb;
     hwrite_cb   write_cb;
@@ -130,7 +129,21 @@ struct hio_s {
     int         event_index[2]; // for poll,kqueue
     void*       hovlp;          // for iocp/overlapio
     void*       ssl;            // for SSL
+    void*       ctx;
 };
+/*
+ * hio lifeline:
+ * fd =>
+ * hio_get => HV_ALLOC_SIZEOF(io) => hio_init =>
+ * hio_ready => hio_add => hio_del => hio_done =>
+ * hio_close => hclose_cb =>
+ * hio_free => HV_FREE(io)
+ */
+void hio_init(hio_t* io);
+void hio_ready(hio_t* io);
+void hio_done(hio_t* io);
+void hio_free(hio_t* io);
+uint32_t hio_next_id();
 
 #define EVENT_ENTRY(p)          container_of(p, hevent_t, pending_node)
 #define IDLE_ENTRY(p)           container_of(p, hidle_t,  node)
@@ -162,7 +175,7 @@ struct hio_s {
 #define EVENT_ADD(loop, ev, cb) \
     do {\
         ev->loop = loop;\
-        ev->event_id = ++loop->event_counter;\
+        ev->event_id = hloop_next_event_id();\
         ev->cb = (hevent_cb)cb;\
         EVENT_ACTIVE(ev);\
     } while(0)
@@ -178,7 +191,7 @@ struct hio_s {
 #define EVENT_RESET(ev) \
     do {\
         ev->destroy = 0;\
-        ev->active  = 1;\
+        EVENT_ACTIVE(ev);\
         ev->pending = 0;\
     } while(0)
 

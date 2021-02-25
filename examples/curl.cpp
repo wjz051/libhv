@@ -1,3 +1,12 @@
+/*
+ * @build: make examples
+ * @server bin/httpd -s restart -d
+ * @usage: bin/curl -v www.baidu.com
+ *         bin/curl -v 127.0.0.1:8080
+ *         bin/curl -v 127.0.0.1:8080/ping
+ *         bin/curl -v 127.0.0.1:8080/echo -d 'hello,world!'
+ */
+
 #include "http_client.h"
 
 #ifdef _MSC_VER
@@ -186,7 +195,7 @@ int main(int argc, char* argv[]) {
                 ++p;
             }
             if (key_len && value_len) {
-                printf("key=%.*s value=%.*s\n", key_len, key, value_len, value);
+                // printf("key=%.*s value=%.*s\n", key_len, key, value_len, value);
                 FormData data;
                 if (*value == '@') {
                     data.filename = std::string(value+1, value_len-1);

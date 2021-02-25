@@ -108,7 +108,9 @@
 
 #pragma warning (disable: 4018) // signed/unsigned comparison
 #pragma warning (disable: 4100) // unused param
+#pragma warning (disable: 4244) // conversion loss of data
 #pragma warning (disable: 4251) // STL dll
+#pragma warning (disable: 4267) // size_t => int
 #pragma warning (disable: 4819) // Unicode
 #pragma warning (disable: 4996) // _CRT_SECURE_NO_WARNINGS
 
@@ -254,17 +256,6 @@ typedef unsigned __int64    uint64_t;
 
 typedef float               float32_t;
 typedef double              float64_t;
-
-// sizeof(var) = 8
-typedef union {
-    bool        b;
-    char        ch;
-    char*       str;
-    long long   num;
-    float       f;
-    double      lf;
-    void*       ptr;
-} var;
 
 typedef int (*method_t)(void* userdata);
 typedef void (*procedure_t)(void* userdata);

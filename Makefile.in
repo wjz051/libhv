@@ -67,9 +67,10 @@ endif
 
 # CFLAGS, CXXFLAGS, ARFLAGS
 ifeq ($(BUILD_TYPE), DEBUG)
-	DEFAULT_CFLAGS = -g -Wall
+	DEFAULT_CFLAGS = -g -Wall -O0
+else
+	DEFAULT_CFLAGS += -O2
 endif
-DEFAULT_CFLAGS += -O2
 
 CFLAGS ?= $(DEFAULT_CFLAGS)
 CXXFLAGS ?= $(DEFAULT_CFLAGS)
@@ -192,10 +193,11 @@ endif
 endif
 endif
 
-override SRCS += $(foreach dir, $(SRCDIRS), $(wildcard $(dir)/*.c $(dir)/*.cc $(dir)/*.cpp))
-ifeq ($(SRCS), )
-	SRCS = $(wildcard *.c *.cc *.cpp)
+ALL_SRCS += $(foreach dir, $(SRCDIRS), $(wildcard $(dir)/*.c $(dir)/*.cc $(dir)/*.cpp))
+ifeq ($(ALL_SRCS), )
+	ALL_SRCS = $(wildcard *.c *.cc *.cpp)
 endif
+override SRCS += $(filter-out %_test.c %_test.cc %_test.cpp, $(ALL_SRCS))
 # OBJS += $(patsubst %.c, %.o, $(SRCS))
 # OBJS += $(patsubst %.cc, %.o, $(SRCS))
 # OBJS += $(patsubst %.cpp, %.o, $(SRCS))

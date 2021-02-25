@@ -4,6 +4,7 @@
 #include "hsocket.h"
 #include "hssl.h"
 #include "hlog.h"
+#include "hthread.h"
 
 static void __connect_timeout_cb(htimer_t* timer) {
     hio_t* io = (hio_t*)timer->privdata;
@@ -31,26 +32,6 @@ static void __close_timeout_cb(htimer_t* timer) {
     }
 }
 
-static void __keepalive_timeout_cb(htimer_t* timer) {
-    hio_t* io = (hio_t*)timer->privdata;
-    if (io) {
-        char localaddrstr[SOCKADDR_STRLEN] = {0};
-        char peeraddrstr[SOCKADDR_STRLEN] = {0};
-        hlogw("keepalive timeout [%s] <=> [%s]",
-                SOCKADDR_STR(io->localaddr, localaddrstr),
-                SOCKADDR_STR(io->peeraddr, peeraddrstr));
-        io->error = ETIMEDOUT;
-        hio_close(io);
-    }
-}
-
-static void __heartbeat_timer_cb(htimer_t* timer) {
-    hio_t* io = (hio_t*)timer->privdata;
-    if (io && io->heartbeat_fn) {
-        io->heartbeat_fn(io);
-    }
-}
-
 static void __accept_cb(hio_t* io) {
     /*
     char localaddrstr[SOCKADDR_STRLEN] = {0};
@@ -64,16 +45,6 @@ static void __accept_cb(hio_t* io) {
         // printd("accept_cb------\n");
         io->accept_cb(io);
         // printd("accept_cb======\n");
-    }
-
-    if (io->keepalive_timeout > 0) {
-        io->keepalive_timer = htimer_add(io->loop, __keepalive_timeout_cb, io->keepalive_timeout, 1);
-        io->keepalive_timer->privdata = io;
-    }
-
-    if (io->heartbeat_interval > 0) {
-        io->heartbeat_timer = htimer_add(io->loop, __heartbeat_timer_cb, io->heartbeat_interval, INFINITE);
-        io->heartbeat_timer->privdata = io;
     }
 }
 
@@ -95,16 +66,6 @@ static void __connect_cb(hio_t* io) {
         // printd("connect_cb------\n");
         io->connect_cb(io);
         // printd("connect_cb======\n");
-    }
-
-    if (io->keepalive_timeout > 0) {
-        io->keepalive_timer = htimer_add(io->loop, __keepalive_timeout_cb, io->keepalive_timeout, 1);
-        io->keepalive_timer->privdata = io;
-    }
-
-    if (io->heartbeat_interval > 0) {
-        io->heartbeat_timer = htimer_add(io->loop, __heartbeat_timer_cb, io->heartbeat_interval, INFINITE);
-        io->heartbeat_timer->privdata = io;
     }
 }
 
@@ -340,7 +301,7 @@ static int __nio_write(hio_t* io, const void* buf, int len) {
         break;
     case HIO_TYPE_UDP:
     case HIO_TYPE_IP:
-        nwrite = sendto(io->fd, buf, len, 0, io->peeraddr, sizeof(sockaddr_u));
+        nwrite = sendto(io->fd, buf, len, 0, io->peeraddr, SOCKADDR_LEN(io->peeraddr));
         break;
     default:
         nwrite = write(io->fd, buf, len);
@@ -351,13 +312,14 @@ static int __nio_write(hio_t* io, const void* buf, int len) {
 
 static void nio_read(hio_t* io) {
     //printd("nio_read fd=%d\n", io->fd);
+    void* buf;
+    int len, nread;
+read:
     if (io->readbuf.base == NULL || io->readbuf.len == 0) {
         hio_set_readbuf(io, io->loop->readbuf.base, io->loop->readbuf.len);
     }
-    void* buf = io->readbuf.base;
-    int   len = io->readbuf.len;
-    int   nread = 0;
-read:
+    buf = io->readbuf.base;
+    len = io->readbuf.len;
     nread = __nio_read(io, buf, len);
     //printd("read retval=%d\n", nread);
     if (nread < 0) {
@@ -387,8 +349,10 @@ disconnect:
 static void nio_write(hio_t* io) {
     //printd("nio_write fd=%d\n", io->fd);
     int nwrite = 0;
+    hrecursive_mutex_lock(&io->write_mutex);
 write:
     if (write_queue_empty(&io->write_queue)) {
+        hrecursive_mutex_unlock(&io->write_mutex);
         if (io->close) {
             io->close = 0;
             hio_close(io);
@@ -403,6 +367,7 @@ write:
     if (nwrite < 0) {
         if (socket_errno() == EAGAIN) {
             //goto write_done;
+            hrecursive_mutex_unlock(&io->write_mutex);
             return;
         }
         else {
@@ -422,9 +387,11 @@ write:
         // write next
         goto write;
     }
+    hrecursive_mutex_unlock(&io->write_mutex);
     return;
 write_error:
 disconnect:
+    hrecursive_mutex_unlock(&io->write_mutex);
     hio_close(io);
 }
 
@@ -440,10 +407,12 @@ static void hio_handle_events(hio_t* io) {
 
     if ((io->events & HV_WRITE) && (io->revents & HV_WRITE)) {
         // NOTE: del HV_WRITE, if write_queue empty
+        hrecursive_mutex_lock(&io->write_mutex);
         if (write_queue_empty(&io->write_queue)) {
             iowatcher_del_event(io->loop, io->fd, HV_WRITE);
             io->events &= ~HV_WRITE;
         }
+        hrecursive_mutex_unlock(&io->write_mutex);
         if (io->connect) {
             // NOTE: connect just do once
             // ONESHOT
@@ -460,6 +429,7 @@ static void hio_handle_events(hio_t* io) {
 }
 
 int hio_accept(hio_t* io) {
+    io->accept = 1;
     hio_add(io, hio_handle_events, HV_READ);
     return 0;
 }
@@ -483,15 +453,25 @@ int hio_connect(hio_t* io) {
     int timeout = io->connect_timeout ? io->connect_timeout : HIO_DEFAULT_CONNECT_TIMEOUT;
     io->connect_timer = htimer_add(io->loop, __connect_timeout_cb, timeout, 1);
     io->connect_timer->privdata = io;
+    io->connect = 1;
     return hio_add(io, hio_handle_events, HV_WRITE);
 }
 
 int hio_read (hio_t* io) {
+    if (io->closed) {
+        hloge("hio_read called but fd[%d] already closed!", io->fd);
+        return -1;
+    }
     return hio_add(io, hio_handle_events, HV_READ);
 }
 
 int hio_write (hio_t* io, const void* buf, size_t len) {
+    if (io->closed) {
+        hloge("hio_write called but fd[%d] already closed!", io->fd);
+        return -1;
+    }
     int nwrite = 0;
+    hrecursive_mutex_lock(&io->write_mutex);
     if (write_queue_empty(&io->write_queue)) {
 try_write:
         nwrite = __nio_write(io, buf, len);
@@ -514,6 +494,7 @@ try_write:
         __write_cb(io, buf, nwrite);
         if (nwrite == len) {
             //goto write_done;
+            hrecursive_mutex_unlock(&io->write_mutex);
             return nwrite;
         }
 enqueue:
@@ -525,22 +506,43 @@ enqueue:
         rest.offset = nwrite;
         // NOTE: free in nio_write
         HV_ALLOC(rest.base, rest.len);
-        memcpy(rest.base, (char*)buf, rest.len);
+        memcpy(rest.base, buf, rest.len);
         if (io->write_queue.maxsize == 0) {
             write_queue_init(&io->write_queue, 4);
         }
         write_queue_push_back(&io->write_queue, &rest);
     }
+    hrecursive_mutex_unlock(&io->write_mutex);
     return nwrite;
 write_error:
 disconnect:
+    hrecursive_mutex_unlock(&io->write_mutex);
     hio_close(io);
     return nwrite;
 }
 
+static void hio_close_event_cb(hevent_t* ev) {
+    hio_t* io = (hio_t*)ev->userdata;
+    uint32_t id = (uintptr_t)ev->privdata;
+    if (io->id == id) {
+        hio_close((hio_t*)ev->userdata);
+    }
+}
+
 int hio_close (hio_t* io) {
     if (io->closed) return 0;
+    if (hv_gettid() != io->loop->tid) {
+        hevent_t ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.cb = hio_close_event_cb;
+        ev.userdata = io;
+        ev.privdata = (void*)(uintptr_t)io->id;
+        hloop_post_event(io->loop, &ev);
+        return 0;
+    }
+    hrecursive_mutex_lock(&io->write_mutex);
     if (!write_queue_empty(&io->write_queue) && io->error == 0 && io->close == 0) {
+        hrecursive_mutex_unlock(&io->write_mutex);
         io->close = 1;
         hlogw("write_queue not empty, close later.");
         int timeout_ms = io->close_timeout ? io->close_timeout : HIO_DEFAULT_CLOSE_TIMEOUT;
@@ -548,21 +550,18 @@ int hio_close (hio_t* io) {
         io->close_timer->privdata = io;
         return 0;
     }
+    hrecursive_mutex_unlock(&io->write_mutex);
 
     io->closed = 1;
-    hio_del(io, HV_RDWR);
-    if (io->io_type & HIO_TYPE_SOCKET) {
-#ifdef OS_UNIX
-        close(io->fd);
-#else
-        closesocket(io->fd);
-#endif
-    }
+    hio_done(io);
+    __close_cb(io);
     if (io->ssl) {
         hssl_free(io->ssl);
         io->ssl = NULL;
     }
-    __close_cb(io);
+    if (io->io_type & HIO_TYPE_SOCKET) {
+        closesocket(io->fd);
+    }
     return 0;
 }
 #endif
